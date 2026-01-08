@@ -1,12 +1,18 @@
 import pandas as pd
 import concurrent.futures
 import time
+import os
 from longport.openapi import Config, QuoteContext, Period, AdjustType
 
-# Global Context (shared across threads is usually fine for HTTP calls)
-# If you encounter issues, move context creation inside the function.
-config = Config.from_env() 
+# --- CONFIGURATION ---
+# Load from environment variables (Recommended)
+# export LONGPORT_APP_KEY="your_key"
+# export LONGPORT_APP_SECRET="your_secret"
+# export LONGPORT_ACCESS_TOKEN="your_token"
+config = Config.from_env()
 ctx = QuoteContext(config)
+
+OUTPUT_FILE = "stock_liquidity_report.csv"
 
 def fetch_single_stock_history(symbol, static_map):
     """
@@ -14,12 +20,12 @@ def fetch_single_stock_history(symbol, static_map):
     Run this inside a thread.
     """
     try:
-        # 1. Get Static Info from the pre-fetched map
+        # 1. Get Static Info
         info = static_map.get(symbol)
         if not info:
             return None
 
-        # 2. Fetch Candlesticks (The slow network part)
+        # 2. Fetch Candlesticks (30 Trading Days)
         candles = ctx.candlesticks(
             symbol=symbol, 
             period=Period.Day, 
@@ -30,17 +36,17 @@ def fetch_single_stock_history(symbol, static_map):
         if not candles:
             return None
 
-        # 3. Calculations
+        # --- CALCULATIONS ---
         last_close = float(candles[-1].close)
         
-        # Calculate Volume (Shares) and Turnover (Value)
+        # Sums
         total_volume_shares = sum(c.volume for c in candles)
         total_turnover_value = sum(float(c.turnover) for c in candles)
         count = len(candles)
 
         # Averages
-        adv_shares = total_volume_shares / count      # Avg Daily Volume
-        adt_value = total_turnover_value / count      # Avg Daily Turnover (Liquidity)
+        adv_shares = total_volume_shares / count      # Avg Daily Volume (Shares)
+        adt_value = total_turnover_value / count      # Avg Daily Turnover (Value)
 
         # Turnover Rate %
         total_shares = int(info.total_shares) if info.total_shares else 0
@@ -56,39 +62,37 @@ def fetch_single_stock_history(symbol, static_map):
             "Name": info.name_en,
             "Currency": info.currency,
             "Last Price": last_close,
-            "ADT (Value)": adt_value,            # Institutional Liquidity
-            "Turnover Rate %": turnover_rate_pct,# Retail/Hype Metric
-            "Market Cap": market_cap
+            "ADT (Value)": adt_value,            # Institutional Liquidity Metric
+            "Turnover Rate %": turnover_rate_pct,# Retail Activity Metric
+            "Market Cap": market_cap,
+            "Exchange": info.exchange,
+            "Board": info.board
         }
 
     except Exception as e:
         print(f"Error fetching {symbol}: {e}")
         return None
 
-def fetch_market_data_threaded(symbols):
+def fetch_and_save_data(symbols):
     print(f"Starting fetch for {len(symbols)} stocks...")
     start_time = time.time()
     
     data_list = []
 
     try:
-        # 1. Fetch Static Info in BATCH (Very fast, no need to thread)
+        # 1. Fetch Static Info in BATCH
         print("Fetching static info batch...")
         static_info_list = ctx.static_info(symbols)
         static_map = {item.symbol: item for item in static_info_list}
 
         # 2. Multi-threading for Candlesticks
-        # max_workers=10 is a safe balance between speed and rate limits
-        print("Fetching history in parallel...")
+        print(f"Fetching history (Threads=10)...")
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            # Submit all tasks
-            # We pass 'static_map' so threads don't need to fetch static info again
             future_to_symbol = {
                 executor.submit(fetch_single_stock_history, sym, static_map): sym 
                 for sym in symbols
             }
             
-            # Process results as they complete
             for future in concurrent.futures.as_completed(future_to_symbol):
                 result = future.result()
                 if result:
@@ -100,21 +104,35 @@ def fetch_market_data_threaded(symbols):
     elapsed = time.time() - start_time
     print(f"Done! Fetched {len(data_list)} stocks in {elapsed:.2f} seconds.")
     
-    return pd.DataFrame(data_list)
+    # --- SAVE TO CSV ---
+    if data_list:
+        df = pd.DataFrame(data_list)
+        
+        # Sort by ADT (Liquidity) descending
+        df = df.sort_values(by="ADT (Value)", ascending=False)
+        
+        # Save to CSV
+        # encoding='utf-8-sig' ensures Chinese characters (if any) open correctly in Excel
+        df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8-sig')
+        
+        print(f"\nSuccess! Data saved to: {os.path.abspath(OUTPUT_FILE)}")
+        return df
+    else:
+        print("No data found.")
+        return pd.DataFrame()
 
 if __name__ == "__main__":
-    # Test with a longer list to see the speed benefit
+    # Your list of stocks
     my_stocks = [
-        "700.HK", "9988.HK", "0020.HK", "3690.HK", "1810.HK", # HK Tech
-        "AAPL.US", "NVDA.US", "TSLA.US", "MSFT.US", "AMZN.US", # US Tech
-        "0005.HK", "1299.HK", "0939.HK", "0941.HK", "0388.HK"  # HK Blue chips
+        "700.HK", "9988.HK", "0020.HK", "3690.HK", "1810.HK", 
+        "AAPL.US", "NVDA.US", "TSLA.US", "MSFT.US", "AMZN.US",
+        "0005.HK", "1299.HK", "0939.HK", "0941.HK", "0388.HK"
     ]
     
-    df = fetch_market_data_threaded(my_stocks)
+    df = fetch_and_save_data(my_stocks)
     
+    # Optional: Quick Preview in Console
     if not df.empty:
         pd.options.display.float_format = '{:,.2f}'.format
-        # Sort by Liquidity (ADT)
-        df_sorted = df.sort_values(by="ADT (Value)", ascending=False)
-        print("\n--- Multi-Threaded Liquidity Report ---")
-        print(df_sorted[["Symbol", "Name", "ADT (Value)", "Turnover Rate %", "Market Cap"]])
+        print("\n--- Preview (Top 5 by Liquidity) ---")
+        print(df[["Symbol", "Name", "ADT (Value)", "Market Cap"]].head(5))
