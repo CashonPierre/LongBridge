@@ -34,22 +34,26 @@ def get_symbols_from_excel(filepath):
 def fetch_stock_history_raw(symbol):
     """
     Fetches raw candlestick data for a single symbol.
-    Returns a LIST of dictionaries (one per day).
+    Now includes AUTO-FIX for missing suffixes and ERROR PRINTING.
     """
+    # --- 1. Symbol Auto-Fix (Try to guess if suffix is missing) ---
+    # If the symbol looks like "AAPL" (no dot), force it to "AAPL.US"
+    # If your list has HK stocks (like "700"), you might need to adjust this logic manually
+    if "." not in symbol:
+        symbol = f"{symbol}.US"
+
     try:
-        # Fetch last N candles (Daily, No Adjustment)
-        # Note: If you need Split/Dividend adjusted data, change to AdjustType.Forward
+        # Fetch last N candles
         candles = ctx.candlesticks(symbol, Period.Day, CANDLE_COUNT, AdjustType.NoAdjust)
         
         if not candles:
+            # If successful but empty, it might be a wrong symbol or delisted stock
+            # print(f"Warning: {symbol} returned no data.") 
             return []
 
         rows = []
         for c in candles:
-            # Convert timestamp to readable date (YYYY-MM-DD)
-            # LongPort timestamps are usually unix timestamps
             date_str = c.time.date().strftime('%Y-%m-%d')
-            
             rows.append({
                 "Symbol": symbol,
                 "Date": date_str,
@@ -64,7 +68,9 @@ def fetch_stock_history_raw(symbol):
         return rows
 
     except Exception as e:
-        # print(f"Error fetching {symbol}: {e}") # Optional: Uncomment to debug specific failures
+        # --- 2. Print Error to Console ---
+        # We print this so you can see WHY it failed (e.g., "Insufficient quota" or "Invalid symbol")
+        print(f"❌ Error fetching {symbol}: {e}")
         return []
 
 def main():
