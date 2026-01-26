@@ -7,10 +7,10 @@ from datetime import datetime
 from longport.openapi import Config, QuoteContext, Period, AdjustType
 
 # --- CONFIGURATION ---
-INPUT_FILE = "target_stocks.xlsx"
-OUTPUT_FILE = "full_market_history_3y.csv"
-MAX_WORKERS = 10        # Number of parallel download threads
-CANDLE_COUNT = 800      # ~3.2 years of trading days (252 * 3.2 approx 800)
+INPUT_FILE = "target_stocks_filtered.xlsx"   # Your input file
+OUTPUT_FILE = "full_market_history_raw.csv"  # The output file
+MAX_WORKERS = 10        # Parallel threads
+CANDLE_COUNT = 800      # Approx 3.2 years (252 trading days * 3.2)
 
 # Initialize API Context
 config = Config.from_env()
@@ -34,9 +34,8 @@ def get_symbols_from_excel(filepath):
 def fetch_stock_history_raw(symbol):
     """
     Fetches raw candlestick data for a single symbol.
-    FIXED: Uses 'c.timestamp' instead of 'c.time'.
     """
-    # 1. Symbol Auto-Fix (Add .US if missing)
+    # 1. Symbol Auto-Fix: Add .US if missing (Customize if you have HK/CN stocks)
     if "." not in symbol:
         symbol = f"{symbol}.US"
 
@@ -49,11 +48,9 @@ def fetch_stock_history_raw(symbol):
 
         rows = []
         for c in candles:
-            # --- FIX IS HERE ---
-            # The SDK returns a Unix timestamp (integer), not a datetime object.
-            # We must convert it using datetime.fromtimestamp()
-            dt_object = datetime.fromtimestamp(c.timestamp)
-            date_str = dt_object.strftime('%Y-%m-%d')
+            # --- CORRECTION BASED ON YOUR WORKING CODE ---
+            # c.timestamp is ALREADY a datetime object. We just format it.
+            date_str = c.timestamp.strftime('%Y-%m-%d')
             
             rows.append({
                 "Symbol": symbol,
@@ -69,7 +66,7 @@ def fetch_stock_history_raw(symbol):
         return rows
 
     except Exception as e:
-        # Print specific error to help debugging
+        # Print specific error to console for debugging
         print(f"❌ Error fetching {symbol}: {e}")
         return []
 
@@ -85,7 +82,6 @@ def main():
     print(f"Found {len(symbols)} unique symbols. Starting download...")
 
     # 2. Prepare Output CSV (Write Header)
-    # We write to CSV immediately to save memory
     csv_headers = ["Symbol", "Date", "Open", "High", "Low", "Close", "Volume", "Turnover"]
     
     try:
@@ -101,14 +97,11 @@ def main():
     processed_count = 0
     total_rows = 0
 
-    # We use a lock to ensure threads don't write to the file at the exact same time
-    # However, since we are using 'future.result()' in the main thread, we can write sequentially there.
-    
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         # Submit all tasks
         future_to_symbol = {executor.submit(fetch_stock_history_raw, sym): sym for sym in symbols}
         
-        # Open CSV in append mode for the loop
+        # Open CSV in append mode to write as data comes in
         with open(OUTPUT_FILE, 'a', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=csv_headers)
             
@@ -117,13 +110,13 @@ def main():
                 try:
                     data = future.result()
                     if data:
-                        writer.writerows(data) # Write this batch of rows
+                        writer.writerows(data)
                         total_rows += len(data)
                 except Exception as exc:
                     print(f"{symbol} generated an exception: {exc}")
                 
                 processed_count += 1
-                if processed_count % 100 == 0:
+                if processed_count % 50 == 0:
                     print(f"Progress: {processed_count}/{len(symbols)} stocks processed. ({total_rows} rows saved)")
 
     elapsed = time.time() - start_time
