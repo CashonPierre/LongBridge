@@ -3,14 +3,15 @@ import concurrent.futures
 import time
 import os
 import csv
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 from longport.openapi import Config, QuoteContext, Period, AdjustType
 
 # --- CONFIGURATION ---
-INPUT_FILE = "target_stocks_filtered.xlsx"   # Your input file
-OUTPUT_FILE = "full_market_history_raw.csv"  # The output file
-MAX_WORKERS = 10        # Parallel threads
-CANDLE_COUNT = 800      # Approx 3.2 years (252 trading days * 3.2)
+INPUT_FILE = "target_stocks_filtered.xlsx"
+OUTPUT_FILE = "full_market_history_3y.csv"
+MAX_WORKERS = 4          # Low worker count to prevent Rate Limits (Error 301606)
+CANDLE_COUNT = 1000      # Fetch extra candles (approx 4 years) to be safe, then we filter by date
 
 # Initialize API Context
 config = Config.from_env()
@@ -33,42 +34,65 @@ def get_symbols_from_excel(filepath):
 
 def fetch_stock_history_raw(symbol):
     """
-    Fetches raw candlestick data for a single symbol.
+    Fetches raw candlestick data with RETRY logic + DATE FILTERING.
     """
-    # 1. Symbol Auto-Fix: Add .US if missing (Customize if you have HK/CN stocks)
+    # 1. Symbol Auto-Fix
     if "." not in symbol:
         symbol = f"{symbol}.US"
 
-    try:
-        # Fetch last N candles
-        candles = ctx.candlesticks(symbol, Period.Day, CANDLE_COUNT, AdjustType.NoAdjust)
-        
-        if not candles:
-            return []
+    # 2. Calculate Cut-off Date (Exactly 3 years ago from today)
+    start_date = datetime.now() - timedelta(days=365 * 3)
 
-        rows = []
-        for c in candles:
-            # --- CORRECTION BASED ON YOUR WORKING CODE ---
-            # c.timestamp is ALREADY a datetime object. We just format it.
-            date_str = c.timestamp.strftime('%Y-%m-%d')
+    # --- RETRY LOGIC ---
+    max_retries = 5
+    base_delay = 2 
+    
+    for attempt in range(max_retries):
+        try:
+            # Request 1000 candles to be safe (covers >3 years even with holidays)
+            candles = ctx.candlesticks(symbol, Period.Day, CANDLE_COUNT, AdjustType.NoAdjust)
             
-            rows.append({
-                "Symbol": symbol,
-                "Date": date_str,
-                "Open": float(c.open),
-                "High": float(c.high),
-                "Low": float(c.low),
-                "Close": float(c.close),
-                "Volume": int(c.volume),
-                "Turnover": float(c.turnover)
-            })
-        
-        return rows
+            if not candles:
+                return []
 
-    except Exception as e:
-        # Print specific error to console for debugging
-        print(f"❌ Error fetching {symbol}: {e}")
-        return []
+            rows = []
+            for c in candles:
+                # API returns datetime object directly in c.timestamp
+                ts = c.timestamp
+                
+                # --- DATE FILTERING ---
+                # Only keep rows where the date is NEWER than start_date
+                if ts >= start_date:
+                    rows.append({
+                        "Symbol": symbol,
+                        "Date": ts.strftime('%Y-%m-%d'),
+                        "Open": float(c.open),
+                        "High": float(c.high),
+                        "Low": float(c.low),
+                        "Close": float(c.close),
+                        "Volume": int(c.volume),
+                        "Turnover": float(c.turnover)
+                    })
+            
+            # Success! Add small jitter sleep
+            time.sleep(random.uniform(0.1, 0.3))
+            return rows
+
+        except Exception as e:
+            error_msg = str(e)
+            # Handle Rate Limit (301606)
+            if "301606" in error_msg or "rate limit" in error_msg.lower():
+                if attempt < max_retries - 1:
+                    wait_time = base_delay * (2 ** attempt)
+                    print(f"⚠️ Rate limit on {symbol}. Retrying in {wait_time}s... (Attempt {attempt+1})")
+                    time.sleep(wait_time)
+                    continue 
+            
+            # Other errors
+            print(f"❌ Failed {symbol}: {e}")
+            return []
+            
+    return []
 
 def main():
     # 1. Load Symbols
@@ -79,29 +103,31 @@ def main():
         print("No symbols found. Exiting.")
         return
 
-    print(f"Found {len(symbols)} unique symbols. Starting download...")
+    print(f"Found {len(symbols)} unique symbols. Starting download with {MAX_WORKERS} threads...")
 
-    # 2. Prepare Output CSV (Write Header)
+    # 2. Prepare Output CSV
     csv_headers = ["Symbol", "Date", "Open", "High", "Low", "Close", "Volume", "Turnover"]
     
+    # Logic to create file or append if exists
+    file_exists = os.path.exists(OUTPUT_FILE)
+    
     try:
-        with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=csv_headers)
-            writer.writeheader()
+        if not file_exists:
+            with open(OUTPUT_FILE, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=csv_headers)
+                writer.writeheader()
     except Exception as e:
         print(f"Error creating output file: {e}")
         return
 
-    # 3. Multi-threaded Fetching & Incremental Save
+    # 3. Multi-threaded Fetching
     start_time = time.time()
     processed_count = 0
     total_rows = 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # Submit all tasks
         future_to_symbol = {executor.submit(fetch_stock_history_raw, sym): sym for sym in symbols}
         
-        # Open CSV in append mode to write as data comes in
         with open(OUTPUT_FILE, 'a', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=csv_headers)
             
@@ -112,8 +138,10 @@ def main():
                     if data:
                         writer.writerows(data)
                         total_rows += len(data)
+                        if processed_count % 10 == 0:
+                            f.flush()
                 except Exception as exc:
-                    print(f"{symbol} generated an exception: {exc}")
+                    print(f"Critical error on {symbol}: {exc}")
                 
                 processed_count += 1
                 if processed_count % 50 == 0:
