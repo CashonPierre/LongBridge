@@ -1,0 +1,36 @@
+Rules-based margin,,
+,,
+Long Position,,
+Margin,,
+Initial Margin,"25% * Stock Value (minimum of USD 2,000 or 100% of the purchase price, whichever is less)","For Leveraged ETFs, Minimum(25% * Leverage Factor, 100%)"
+Maintenance Margin,25% * Stock Value,
+Reg T End of Day Initial Margin,50% * Stock Value,
+Cash or IRA Cash,100% * Stock Value,
+IRA Margin,Same as Cash,
+,,
+Short Positions,,
+Margin,,
+Initial Margin,"30% * Market Value of Stock, if Stock Value > USD 16.67 per share
+USD 5.00 per share, if Stock Value < USD 16.67 and > USD 5.00
+100% of Market Value of Stock, if Stock Value < USD 5.00
+USD 2.50 per share, if Stock Value <= USD 2.50","For Leveraged ETFs, Minimum(30% * Leverage Factor, 100%)"
+Maintenance Margin,Same as Initial Margin,
+Reg T End of Day Initial Margin,Same as Reg T End of Day for Long Positions,
+Cash or IRA Cash,N/A,
+IRA Margin,Same as Cash,
+,,
+Non-Marginable Long or Short Positions,,
+Margin,,
+Initial Margin,100% * Stock Value,
+Maintenance Margin,Same as Initial Margin,
+Reg T End of Day Initial Margin,Same as Initial Margin,
+Cash or IRA Cash,"Same as Initial Margin, Only Long Positions",
+IRA Margin,N/A,
+,,
+Special Margin Stocks,,
+reduces marginability,"small market capitalization or small issue size
+low liquidity in the collective primary/secondary exchanges
+involvement in tenders and other corporate action","Changes in marginability are generally considered for a specific security. 
+However, in cases of concerns about the viability or liquidity of a company, 
+marginability reductions will apply to all securities issued by, or related to, 
+the affected company, including fixed income, derivatives, depository receipts, etc."

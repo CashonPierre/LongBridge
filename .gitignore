@@ -1,1 +1,7 @@
 stock_data.csv
+artifacts/
+.ipynb_checkpoints/
+__pycache__/
+stock_daily_closes.csv
+Regression_data.csv
+circulating_shares_report.csv
